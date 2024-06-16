@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Ejercicio 2: Compresion de Imagenes con Quad Trees</title>
+    <!-- Bootstrap CSS -->
+    <link href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            background-color: #f8f9fa; /* Color de fondo suave */
+        }
+        .container {
+            margin-top: 50px; /* Margen superior para centrar en la página */
+        }
+        canvas {
+            border: 1px solid #ced4da; /* Borde del canvas */
+            display: block;
+            margin: 10px auto;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1); /* Sombra suave */
+        }
+        .card {
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1); /* Sombra suave para la tarjeta */
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="card p-4">
+            <h1 class="text-center mb-4">Ejercicio 2: Compresion de Imagenes con Quad Trees</h1>
+            <div class="form-group">
+                <label for="imageLoader">Selecciona una imagen:</label>
+                <input type="file" id="imageLoader" name="imageLoader" class="form-control-file">
+            </div>
+            <div class="form-group">
+                <label for="thresholdInput">Umbral:</label>
+                <input type="range" id="thresholdInput" name="thresholdInput" min="0" max="5000" step="100" value="1000" class="form-control-range">
+                <span id="thresholdValue">1000</span>
+            </div>
+            <canvas id="originalCanvas"></canvas>
+            <canvas id="compressedCanvas"></canvas>
+            <p id="psnr" class="text-center mt-3"></p>
+            <button id="downloadButton" class="btn btn-primary btn-block">Descargar Imagen Comprimida</button>
+        </div>
+    </div>
+
+    <!-- Bootstrap JS and jQuery (opcional para Bootstrap) -->
+    <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@popperjs/core@2.5.4/dist/umd/popper.min.js"></script>
+    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
+
+    <script>
+        document.getElementById('imageLoader').addEventListener('change', handleImage, false);
+        document.getElementById('thresholdInput').addEventListener('input', updateThreshold, false);
+        document.getElementById('downloadButton').addEventListener('click', downloadCompressedImage, false);
+        
+        let originalImageData;
+        let grayscaleData;
+        let reconstructedImageData;
+        
+        function handleImage(e) {
+            const reader = new FileReader();
+            reader.onload = function(event) {
+                const img = new Image();
+                img.onload = function() {
+                    const originalCanvas = document.getElementById('originalCanvas');
+                    const ctx = originalCanvas.getContext('2d');
+                    originalCanvas.width = img.width;
+                    originalCanvas.height = img.height;
+                    ctx.drawImage(img, 0, 0);
+        
+                    originalImageData = ctx.getImageData(0, 0, img.width, img.height);
+                    grayscaleData = toGrayscale(originalImageData);
+        
+                    const threshold = parseFloat(document.getElementById('thresholdInput').value);
+                    const quadTree = buildQuadTree(grayscaleData, 0, 0, img.width, img.height, threshold);
+                    drawQuadTree(ctx, quadTree);
+        
+                    const compressedCanvas = document.getElementById('compressedCanvas');
+                    compressedCanvas.width = img.width;
+                    compressedCanvas.height = img.height;
+                    const compressedCtx = compressedCanvas.getContext('2d');
+                    reconstructedImageData = reconstructImage(quadTree, img.width, img.height);
+                    drawReconstructedImage(compressedCtx, reconstructedImageData, img.width, img.height);
+        
+                    const psnr = calculatePSNR(grayscaleData, reconstructedImageData, img.width, img.height);
+                    document.getElementById('psnr').innerText = `PSNR: ${psnr.toFixed(2)} dB`;
+                }
+                img.src = event.target.result;
+            }
+            reader.readAsDataURL(e.target.files[0]);
+        }
+        
+        function updateThreshold() {
+            const threshold = document.getElementById('thresholdInput').value;
+            document.getElementById('thresholdValue').innerText = threshold;
+        
+            const originalCanvas = document.getElementById('originalCanvas');
+            const ctx = originalCanvas.getContext('2d');
+            ctx.putImageData(originalImageData, 0, 0);
+        
+            const quadTree = buildQuadTree(grayscaleData, 0, 0, originalCanvas.width, originalCanvas.height, parseFloat(threshold));
+            drawQuadTree(ctx, quadTree);
+        
+            const compressedCanvas = document.getElementById('compressedCanvas');
+            const compressedCtx = compressedCanvas.getContext('2d');
+            reconstructedImageData = reconstructImage(quadTree, originalCanvas.width, originalCanvas.height);
+            drawReconstructedImage(compressedCtx, reconstructedImageData, originalCanvas.width, originalCanvas.height);
+        
+            const psnr = calculatePSNR(grayscaleData, reconstructedImageData, originalCanvas.width, originalCanvas.height);
+            document.getElementById('psnr').innerText = `PSNR: ${psnr.toFixed(2)} dB`;
+        }
+        
+        function toGrayscale(imageData) {
+            const data = imageData.data;
+            const grayscaleData = [];
+            for (let i = 0; i < data.length; i += 4) {
+                const avg = (data[i] + data[i + 1] + data[i + 2]) / 3;
+                grayscaleData.push(avg);
+            }
+            return grayscaleData;
+        }
+        
+        class QuadTreeNode {
+            constructor(x, y, width, height, value = null) {
+                this.x = x;
+                this.y = y;
+                this.width = width;
+                this.height = height;
+                this.value = value;
+                this.children = [];
+            }
+        }
+        
+        function buildQuadTree(data, x, y, width, height, threshold) {
+            const node = new QuadTreeNode(x, y, width, height);
+            if (isHomogeneous(data, x, y, width, height, threshold)) {
+                node.value = calculateMean(data, x, y, width, height);
+            } else {
+                const halfWidth = Math.floor(width / 2);
+                const halfHeight = Math.floor(height / 2);
+                if (halfWidth > 0 && halfHeight > 0) {
+                    node.children.push(buildQuadTree(data, x, y, halfWidth, halfHeight, threshold));
+                    node.children.push(buildQuadTree(data, x + halfWidth, y, halfWidth, halfHeight, threshold));
+                    node.children.push(buildQuadTree(data, x, y + halfHeight, halfWidth, halfHeight, threshold));
+                    node.children.push(buildQuadTree(data, x + halfWidth, y + halfHeight, halfWidth, halfHeight, threshold));
+                } else {
+                    node.value = calculateMean(data, x, y, width, height);
+                }
+            }
+            return node;
+        }
+        
+        function isHomogeneous(data, x, y, width, height, threshold) {
+            const mean = calculateMean(data, x, y, width, height);
+            let error = 0;
+            for (let i = 0; i < height; i++) {
+                for (let j = 0; j < width; j++) {
+                    const pixelValue = data[(y + i) * width + (x + j)];
+                    error += (pixelValue - mean) ** 2;
+                }
+            }
+            error /= (width * height);
+            return error < threshold;
+        }
+        
+        function calculateMean(data, x, y, width, height) {
+            let sum = 0;
+            for (let i = 0; i < height; i++) {
+                for (let j = 0; j < width; j++) {
+                    sum += data[(y + i) * width + (x + j)];
+                }
+            }
+            return sum / (width * height);
+        }
+        
+        function drawQuadTree(ctx, node) {
+            if (node.value !== null) {
+                ctx.strokeStyle = 'red';
+                ctx.strokeRect(node.x, node.y, node.width, node.height);
+            } else {
+                for (let child of node.children) {
+                    drawQuadTree(ctx, child);
+                }
+            }
+        }
+        
+        function reconstructImage(node, width, height) {
+            const reconstructedData = new Array(width * height).fill(0);
+            fillReconstructedData(node, reconstructedData, width);
+            return reconstructedData;
+        }
+        
+        function fillReconstructedData(node, data, width) {
+            if (node.value !== null) {
+                for (let i = 0; i < node.height; i++) {
+                    for (let j = 0; j < node.width; j++) {
+                        data[(node.y + i) * width + (node.x + j)] = node.value;
+                    }
+                }
+            } else {
+                for (let child of node.children) {
+                    fillReconstructedData(child, data, width);
+                }
+            }
+        }
+        
+        function drawReconstructedImage(ctx, data, width, height) {
+            const imageData = ctx.createImageData(width, height);
+            for (let i = 0; i < data.length; i++) {
+                imageData.data[i * 4] = data[i];
+                imageData.data[i * 4 + 1] = data[i];
+                imageData.data[i * 4 + 2] = data[i];
+                imageData.data[i * 4 + 3] = 255; // Alpha channel
+            }
+            ctx.putImageData(imageData, 0, 0);
+        }
+        
+        function downloadCompressedImage() {
+            const compressedCanvas = document.getElementById('compressedCanvas');
+            const link = document.createElement('a');
+            link.download = 'compressed_image.png';
+            link.href = compressedCanvas.toDataURL();
+            link.click();
+        }
+        
+        function calculatePSNR(originalData, reconstructedData, width, height) {
+            let mse = 0; // Mean Squared Error
+            for (let i = 0; i < width * height; i++) {
+                const error = originalData[i] - reconstructedData[i];
+                mse += error * error;
+            }
+            mse /= (width * height);
+        
+            if (mse === 0) {
+                return Infinity; // No difference between images
+            }
+        
+            const maxPixel = 255;
+            const psnr = 20 * Math.log10(maxPixel / Math.sqrt(mse));
+            return psnr;
+        }
+    </script>
+</body>
+</html>
